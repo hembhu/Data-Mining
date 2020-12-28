@@ -1,0 +1,413 @@
+---
+title: "Spotify Analysis"
+author: "Hem Bhupaal Reddy"
+
+output: word_document
+---
+
+```{r setup, include=FALSE}
+# Case Study
+library(tidyverse)
+library(psych)
+library(caret)
+library(FNN)
+library(ISLR)
+library(tree)
+library(randomForest)
+library(neuralnet)
+library(ROCR)
+library(e1071)
+library(gains)
+library(ggplot2)
+library(reshape2)
+library(rpart)
+library(rpart.plot)
+library(corrplot)
+library(ggthemes)
+library(dplyr)
+library(scales)
+library(GGally)
+library(car) 
+library(gvlma) 
+library(MASS) 
+library(leaps) 
+library(bootstrap)
+library(gmodels)
+library(caret)
+library(forecast)
+```
+
+
+## R Markdown
+```{r }
+# Load Project_data2018.csv
+setwd("C:/Users/msy92/Desktop/IE 7275 HW")
+df <-data.frame(read.csv("Project_data2018.csv"))
+describe(df)
+str(df)
+```
+
+
+################################################################ Data Visualization
+```{r }
+# Let's look at Popularity Histogram
+ggplot(df, aes(df$popularity)) +geom_histogram(binwidth = 1, color = "black", fill = "steelblue") +ggtitle("popularity Histogram")
+
+# Bar plot of mode
+ggplot(df, aes(as.factor(df$mode), fill = df$popularity)) +geom_histogram(stat = "count") +ggtitle("mode Barplot") +labs(x = "mode")
+
+#boxplot 
+par(mfcol = c(1,4))
+boxplot(df$popularity ~ df$mode, xlab = "mode", ylab = "popularity")
+boxplot(df$energy ~ df$mode, xlab = "mode", ylab = "energy")
+boxplot(df$key ~ df$mode, xlab = "mode", ylab = "key")
+boxplot(df$acousticness ~ df$mode, xlab = "mode", ylab = "acousticness")
+par(mfcol = c(1,4))
+boxplot(df$popularity ~ df$key, xlab = "key", ylab = "acousticness")
+boxplot(df$energy ~ df$key, xlab = "key", ylab = "energy")
+boxplot(df$liveness ~ df$key, xlab = "key", ylab = "liveness")
+boxplot(df$tempo ~ df$key, xlab = "key", ylab = "tempo")
+
+#heatmap
+par(mfcol = c(1,1))
+heatmap(cor(df),Rowv = NA, Colv = NA)
+cor.mat <- cor(df)
+melt.cor.mat <- melt(cor.mat)
+melt.cor.mat
+
+# corrplot
+cor <-round(cor(df[,1:13]),2)
+corrplot(cor, type = "upper")
+
+#generate scatter matrix
+ggpairs(df)+ theme_bw()
+#scatterplotMatrix(df, spread = FALSE, lty.smooth = 2, main = "Scatter Plot Matrix" ) 
+
+#bubble charts of popularity
+ggplot(df, aes( x = acousticness ,y = energy, size = popularity)) + geom_point(shape =21, color = "blue", fill = "cornsilk") + labs(x ="acousticness", y = "energy", size = "popularity", title = "Bubble Chart")
+ggplot(df, aes( x = loudness ,y = energy, size = popularity)) + geom_point(shape =21, color = "red", fill = "cornsilk") + labs(x ="acousticness", y = "energy", size = "popularity", title = "Bubble Chart")
+```
+
+
+################################################################ Data Pre-processing
+```{r }
+#Define the normalize function& standardize funciton 
+
+normalize <-function(x) {
+  return(((x -min(x))) / (max(x) -min(x)))
+}
+
+standardize <- function(x){  
+  return((x-mean(x))/sd(x))
+         }
+# standardize the data frame
+df.norm <-as.data.frame(cbind(as.data.frame(lapply(df[2:13], standardize)),df$popularity)) %>%rename(popularity = "df$popularity")
+df.norm
+```
+
+
+################################################################ Data Reduction and Transformation
+```{r }
+#Performing PCA on the data
+# Perform Scree Plot and Parallel Analysis
+fa.parallel(df.norm[, 2:13], fa = "pc", n.iter = 100)
+# Perform PCA with 4 components
+#extract the components and rotate the component
+pc <-principal(df[, 2:13], nfactors = 4, rotate = "none", scores = TRUE)
+pc_var <-principal(df.norm[, 2:13], nfactors = 4, rotate = "varimax", scores = TRUE)
+#compute the components score
+head(pc$scores)
+pc$loadings
+pc <-cbind(as.data.frame(pc$scores), df.norm$popularity) %>%rename(popularity = "df.norm$popularity")
+pc
+# corrplot of pca data
+cor(pc)
+cor <-cor(pc[,1:4])
+corrplot(cor, type = "upper")
+```
+
+
+#########################Splitting data into training and validation sets
+```{r }
+#default seperation of traning and validate datasets
+set.seed(111)
+indices.df <- sample(c(1:dim(df)[1]), dim(df)[1]*0.6)
+train.df <- df[indices.df, ]
+valid.df <- df[-indices.df, ]
+train.df
+valid.df
+
+# Generate the training datasets without PCA
+set.seed(111)
+indices.dfnorm <- sample(c(1:dim(df.norm)[1]), dim(df.norm)[1]*0.6)
+train.dfnorm <- df.norm[indices.dfnorm, ]
+valid.dfnorm <- df.norm[-indices.dfnorm, ]
+train.dfnorm
+valid.dfnorm
+
+# Generate training and validation data with PCA
+set.seed(111)
+indices.pc <- sample(c(1:dim(pc)[1]), dim(pc)[1]*0.6)
+train.pc <-pc[indices.pc, ]
+valid.pc <-pc[-indices.pc, ]
+train.pc
+valid.pc
+
+```
+
+
+################################################################ Data Mining Techniques
+######################### Implementing KNN
+```{r }
+# compute knn for different k on validation without PCA
+accuracy.df <- data.frame(k = seq(1, 50, 1), RMSE = rep(0, 50))
+for(i in 1:50) {
+  
+  song.knn  <- knnreg(train.dfnorm[, 1:12],train.dfnorm$popularity, k = i)
+  song.knn.pred <- predict(song.knn, valid.dfnorm[,1:12])
+  accuracy.df[i, 2] <- data.frame(accuracy(valid.dfnorm$popularity, song.knn.pred))$RMSE
+}
+accuracy.df
+#k =21 have the min RMSE
+song.knn  <- knnreg(train.dfnorm[, 1:12],train.dfnorm$popularity, k = 21)
+song.knn.pred <- predict(song.knn, valid.dfnorm[,1:12])
+accuracy(valid.dfnorm$popularity, song.knn.pred)
+cor(valid.dfnorm$popularity,song.knn.pred)
+#Lift Chart plot
+gain.knn <- gains(valid.dfnorm$popularity,song.knn.pred, groups = length(song.knn.pred))
+plot(c(0, gain.knn$cume.pct.of.total*sum(valid.dfnorm$popularity))~c(0, gain.knn$cume.obs), xlab = "# cases", ylab = "Cumulative", main = "Lift Chart of KNN(Original Dataset)", type = "l")
+lines(c(0, sum(valid.dfnorm$popularity))~c(0, dim(valid.dfnorm)[1]), lty = 2)
+
+# compute knn for different k on validation with PCA
+accuracy.pc <- data.frame(k = seq(1, 50, 1), RMSE = rep(0, 50))
+for(i in 1:50) {
+  
+  pc.knn  <- knnreg(train.pc[, 1:4],train.pc$popularity, k = i)
+  pc.knn.pred <- predict(pc.knn, valid.pc[,1:4])
+  accuracy.pc[i, 2] <- data.frame(accuracy(valid.pc$popularity, pc.knn.pred))$RMSE
+}
+accuracy.pc
+#k =47 have the min RMSE
+pc.knn  <- knnreg(train.pc[, 1:4],train.pc$popularity, k = 47)
+pc.knn.pred <- predict(pc.knn, valid.pc[,1:4])
+accuracy(valid.pc$popularity, pc.knn.pred)
+cor(valid.pc$popularity,pc.knn.pred)
+#Lift Chart plot
+gain.knn <- gains(valid.dfnorm$popularity,pc.knn.pred, groups = length(pc.knn.pred))
+plot(c(0, gain.knn$cume.pct.of.total*sum(valid.dfnorm$popularity))~c(0, gain.knn$cume.obs), xlab = "# cases", ylab = "Cumulative", main = "Lift Chart of KNN(PCA)", type = "l")
+lines(c(0, sum(valid.dfnorm$popularity))~c(0, dim(valid.dfnorm)[1]), lty = 2)
+
+```
+
+
+######################### Implementing  linear Regression
+```{r }
+# On Original Dataset
+song.lm <- lm(popularity~., train.dfnorm)
+muti1.song.lm<-lm(popularity~ acousticness+danceability+instrumentalness+speechiness+loudness, train.dfnorm)
+muti2.song.lm<-lm(popularity~ acousticness+danceability+instrumentalness+speechiness+loudness+liveness+mode, train.dfnorm)
+#
+song.lm.pred <- predict(song.lm, valid.dfnorm)
+muti1.song.lm.pred <- predict(muti1.song.lm, valid.dfnorm)
+muti2.song.lm.pred <- predict(muti2.song.lm, valid.dfnorm)
+
+#
+accuracy(valid.dfnorm$popularity, song.lm.pred)
+accuracy(valid.dfnorm$popularity, muti1.song.lm.pred)
+accuracy(valid.dfnorm$popularity, muti2.song.lm.pred)
+
+#
+cor(valid.dfnorm$popularity, song.lm.pred)
+cor(valid.dfnorm$popularity, muti1.song.lm.pred)
+cor(valid.dfnorm$popularity, muti2.song.lm.pred)
+#
+#Lift Chart plot
+gain.lm <- gains(valid.dfnorm$popularity,song.lm.pred, groups = length(song.lm.pred))
+plot(c(0, gain.lm$cume.pct.of.total*sum(valid.dfnorm$popularity))~c(0, gain.lm$cume.obs), xlab = "# cases", ylab = "Cumulative", main = "Lift Chart of Linear Regression(Original Dataset)", type = "l")
+lines(c(0, sum(valid.dfnorm$popularity))~c(0, dim(valid.dfnorm)[1]), lty = 2)
+
+# On PCA Dataset
+pc.lm <- lm(popularity~., train.pc)
+#
+pc.lm.pred <- predict(pc.lm, valid.pc)
+#
+accuracy(valid.pc$popularity, pc.lm.pred)
+#
+cor(valid.pc$popularity, pc.lm.pred)
+#Lift Chart plot
+gain.lm <- gains(valid.dfnorm$popularity,pc.lm.pred, groups = length(pc.lm.pred))
+plot(c(0, gain.lm$cume.pct.of.total*sum(valid.dfnorm$popularity))~c(0, gain.lm$cume.obs), xlab = "# cases", ylab = "Cumulative", main = "Lift Chart of Linear Regression(PCA)", type = "l")
+lines(c(0, sum(valid.dfnorm$popularity))~c(0, dim(valid.dfnorm)[1]), lty = 2)
+
+```
+
+
+######################### Implementing Random Forests Tech
+```{r }
+# On original dataset
+set.seed(111)
+rf.df <-randomForest(popularity~ ., data = train.dfnorm,ntree = 500, 
+                   mtry = 4, nodesize = 5, importance = TRUE)
+rf.pred.df <-predict(rf.df, valid.dfnorm)
+accuracy(valid.dfnorm$popularity, rf.pred.df)
+cor(valid.dfnorm$popularity,rf.pred.df)
+#Lift Chart plot
+gain.rf <- gains(valid.dfnorm$popularity,rf.pred.df, groups = length(rf.pred.df))
+plot(c(0, gain.rf$cume.pct.of.total*sum(valid.dfnorm$popularity))~c(0, gain.rf$cume.obs), xlab = "# cases", ylab = "Cumulative", main = "Lift Chart of Random Forests Tech(Original Dataset)", type = "l")
+lines(c(0, sum(valid.dfnorm$popularity))~c(0, dim(valid.dfnorm)[1]), lty = 2)
+
+
+
+# On PCA Dataset
+set.seed(111)
+rf.pc <-randomForest(popularity~ ., data = train.pc,ntree = 500, 
+                   mtry = 4, nodesize = 5, importance = TRUE)
+rf.pred.pc <-predict(rf.pc, valid.pc)
+accuracy(valid.pc$popularity, rf.pred.pc)
+cor(valid.pc$popularity,rf.pred.pc)
+
+#Lift Chart plot
+gain.rf <- gains(valid.dfnorm$popularity,rf.pred.pc, groups = length(rf.pred.pc))
+plot(c(0, gain.rf$cume.pct.of.total*sum(valid.dfnorm$popularity))~c(0, gain.rf$cume.obs), xlab = "# cases", ylab = "Cumulative", main = "Lift Chart of Random Forests Tech(PCA Dataset)", type = "l")
+lines(c(0, sum(valid.dfnorm$popularity))~c(0, dim(valid.dfnorm)[1]), lty = 2)
+
+```
+
+
+######################### Implementing Support Vector Machine Tech
+```{r }
+
+# On Original Dataset
+svm.df <- svm(popularity~ ., data = train.dfnorm)
+#
+svm.pred.df <- predict(svm.df, valid.dfnorm)
+#
+accuracy(valid.dfnorm$popularity, svm.pred.df)
+cor(valid.dfnorm$popularity,svm.pred.df)
+#Lift Chart plot
+gain.svm <- gains(valid.dfnorm$popularity,svm.pred.df, groups = length(svm.pred.df))
+plot(c(0, gain.svm$cume.pct.of.total*sum(valid.dfnorm$popularity))~c(0, gain.svm$cume.obs), xlab = "# cases", ylab = "Cumulative", main = "Lift Chart of SVM(Ori Dataset)", type = "l")
+lines(c(0, sum(valid.dfnorm$popularity))~c(0, dim(valid.dfnorm)[1]), lty = 2)
+
+
+# On PCA Dataset
+svm.pc <- svm(popularity~ ., data = train.pc)
+#
+svm.pred.pc <- predict(svm.pc, valid.pc)
+#
+accuracy(valid.pc$popularity, svm.pred.pc)
+cor(valid.pc$popularity,svm.pred.pc)
+#Lift Chart plot
+gain.svm <- gains(valid.dfnorm$popularity,svm.pred.pc, groups = length(svm.pred.pc))
+plot(c(0, gain.svm$cume.pct.of.total*sum(valid.dfnorm$popularity))~c(0, gain.svm$cume.obs), xlab = "# cases", ylab = "Cumulative", main = "Lift Chart of SVM(PCA Dataset)", type = "l")
+lines(c(0, sum(valid.dfnorm$popularity))~c(0, dim(valid.dfnorm)[1]), lty = 2)
+```
+
+
+######################### Implementing Neural Networks Tech
+```{r }
+# On Original Dataset
+set.seed(111)
+nn.df <- neuralnet(popularity~ ., data = train.dfnorm, hidden =3,linear.output = T,stepmax = 1e6)
+# display weights
+nn.df$weights
+# plot network
+plot(nn.df,main = "Artificial Neural Net (Ori)",rep="best")
+#
+nn.pred.df <- compute(nn.df, valid.dfnorm)
+#
+nn.pred.value.df <- nn.pred.df$net.result
+#
+accuracy(valid.dfnorm$popularity, nn.pred.value.df)
+cor(valid.dfnorm$popularity, nn.pred.value.df)
+#Lift Chart plot
+gain.nn <- gains(valid.dfnorm$popularity,nn.pred.value.df, groups = length(nn.pred.value.df))
+plot(c(0, gain.nn$cume.pct.of.total*sum(valid.dfnorm$popularity))~c(0, gain.nn$cume.obs), xlab = "# cases", ylab = "Cumulative", main = "Lift Chart of Nerual Net(Ori Dataset)", type = "l")
+lines(c(0, sum(valid.dfnorm$popularity))~c(0, dim(valid.dfnorm)[1]), lty = 2)
+
+
+# On PCA Dataset
+set.seed(111)
+nn.pc <- neuralnet(popularity~ ., data = train.pc, hidden =3,linear.output = T,stepmax = 1e6)
+# display weights
+nn.pc$weights
+# plot network
+plot(nn.pc,main = "Artificial Neural Net (PCA)",rep="best")
+#
+nn.pred.pc <- compute(nn.pc, valid.pc)
+#
+nn.pred.value.pc <- nn.pred.pc$net.result
+#
+accuracy(valid.pc$popularity, nn.pred.value.pc)
+cor(valid.pc$popularity, nn.pred.value.pc)
+#Lift Chart plot
+gain.nn <- gains(valid.dfnorm$popularity,nn.pred.value.pc, groups = length(nn.pred.value.pc))
+plot(c(0, gain.nn$cume.pct.of.total*sum(valid.dfnorm$popularity))~c(0, gain.nn$cume.obs), xlab = "# cases", ylab = "Cumulative", main = "Lift Chart of Neural Net(PCA Dataset)", type = "l")
+lines(c(0, sum(valid.dfnorm$popularity))~c(0, dim(valid.dfnorm)[1]), lty = 2)
+
+```
+
+
+##############################################################Writing the Output File&Plots
+```{r }
+# Plot all lift charts for Original Dataset
+df.lift <- data.frame(case = c(1:dim(valid.dfnorm)[1]),
+                      
+  knnreg = cumsum(valid.dfnorm$popularity[order(song.knn.pred, decreasing = T)]),
+  linearreg = cumsum(valid.dfnorm$popularity[order(song.lm.pred, decreasing = T)]),
+  rfreg = cumsum(valid.dfnorm$popularity[order(rf.pred.df, decreasing = T)]),
+  svmreg = cumsum(valid.dfnorm$popularity[order(svm.pred.df, decreasing = T)]),
+  nnreg = cumsum(valid.dfnorm$popularity[order(nn.pred.value.df, decreasing = T)]),
+
+  baseline = c(1:dim(valid.dfnorm)[1])*mean(valid.dfnorm$popularity)
+  )
+
+ggplot(df.lift, aes(x = case)) + 
+  geom_line(aes(y = knnreg), color = "blue") +
+  
+  geom_line(aes(y = linearreg), color = "black") + 
+  
+  geom_line(aes(y=rfreg), color = "green" ) + 
+  
+  geom_line(aes(y=svmreg), color = "grey") + 
+
+  geom_line(aes(y=nnreg), color = "yellow") + 
+
+  geom_line(aes(y=baseline), color = "red", linetype = "dashed") + 
+  
+  theme_bw()+
+  
+  labs(x = "# of cases", y = "Cumulative",title = "Lift Charts for Original dataset with different model")
+
+# Plot all lift charts for PCA Dataset
+pc.lift <- data.frame(case = c(1:dim(valid.pc)[1]),
+                      
+  knnreg = cumsum(valid.pc$popularity[order(pc.knn.pred, decreasing = T)]),
+  linearreg = cumsum(valid.pc$popularity[order(pc.lm.pred, decreasing = T)]),
+  rfreg = cumsum(valid.pc$popularity[order(rf.pred.pc, decreasing = T)]),
+  svmreg = cumsum(valid.pc$popularity[order(svm.pred.pc, decreasing = T)]),
+  nnreg = cumsum(valid.pc$popularity[order(nn.pred.value.pc, decreasing = T)]),
+
+  baseline = c(1:dim(valid.pc)[1])*mean(valid.pc$popularity)
+  )
+
+ggplot(pc.lift, aes(x = case),shape) + 
+  
+  geom_line(aes(y = knnreg), color = "blue") +
+  
+  geom_line(aes(y = linearreg), color = "black") + 
+  
+  geom_line(aes(y=rfreg), color = "green" ) + 
+  
+  geom_line(aes(y=svmreg), color = "grey") + 
+
+  geom_line(aes(y=nnreg), color = "yellow") + 
+
+  geom_line(aes(y=baseline), color = "red", linetype = "dashed") + 
+  
+  theme_bw()+
+
+  labs(x = "# of cases", y = "Cumulative", title = "Lift Charts for PCA dataset with different model")
+```
+
+
